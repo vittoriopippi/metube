@@ -239,6 +239,24 @@
                       </div>
                     </div>
                     }
+                    <div class="col-auto">
+                      <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" role="switch" id="checkbox-download-thumbnail"
+                          name="downloadThumbnail" [(ngModel)]="downloadThumbnail" (change)="downloadThumbnailChanged()"
+                          [disabled]="addInProgress || downloads.loading"
+                          ngbTooltip="Download thumbnail alongside video">
+                        <label class="form-check-label" for="checkbox-download-thumbnail">Download Thumbnail</label>
+                      </div>
+                    </div>
+                    <div class="col-auto">
+                      <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" role="switch" id="checkbox-download-metadata"
+                          name="downloadMetadata" [(ngModel)]="downloadMetadata" (change)="downloadMetadataChanged()"
+                          [disabled]="addInProgress || downloads.loading"
+                          ngbTooltip="Download metadata (NFO) alongside video">
+                        <label class="form-check-label" for="checkbox-download-metadata">Download Metadata (NFO)</label>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

@@ -57,8 +57,8 @@ class Config:
         'PUBLIC_HOST_AUDIO_URL': 'audio_download/',
         'OUTPUT_TEMPLATE': '%(title)s.%(ext)s',
         'OUTPUT_TEMPLATE_CHAPTER': '%(title)s - %(section_number)02d - %(section_title)s.%(ext)s',
-        'OUTPUT_TEMPLATE_PLAYLIST': '%(playlist_title)s/%(title)s.%(ext)s',
-        'OUTPUT_TEMPLATE_CHANNEL': '%(channel)s/%(title)s.%(ext)s',
+        'OUTPUT_TEMPLATE_PLAYLIST': '%(title)s.%(ext)s',
+        'OUTPUT_TEMPLATE_CHANNEL': '%(title)s.%(ext)s',
         'DEFAULT_OPTION_PLAYLIST_ITEM_LIMIT' : '0',
         'YTDL_OPTIONS': '{}',
         'YTDL_OPTIONS_FILE': '',
@@ -233,7 +233,11 @@ if config.YTDL_OPTIONS_FILE:
 @routes.post(config.URL_PREFIX + 'add')
 async def add(request):
     log.info("Received request to add download")
-    post = await request.json()
+    try:
+        post = await request.json()
+    except json.JSONDecodeError:
+        log.error("Bad request: invalid JSON body")
+        raise web.HTTPBadRequest(text='Invalid JSON body')
     log.info(f"Request data: {post}")
     url = post.get('url')
     quality = post.get('quality')
@@ -260,13 +264,24 @@ async def add(request):
         chapter_template = config.OUTPUT_TEMPLATE_CHAPTER
 
     playlist_item_limit = int(playlist_item_limit)
+    download_thumbnail = post.get('download_thumbnail')
+    download_metadata = post.get('download_metadata')
 
-    status = await dqueue.add(url, quality, format, folder, custom_name_prefix, playlist_item_limit, auto_start, split_by_chapters, chapter_template)
+    if download_thumbnail is None:
+        download_thumbnail = False
+    if download_metadata is None:
+        download_metadata = False
+
+    status = await dqueue.add(url, quality, format, folder, custom_name_prefix, playlist_item_limit, auto_start, split_by_chapters, chapter_template, download_thumbnail, download_metadata)
     return web.Response(text=serializer.encode(status))
 
 @routes.post(config.URL_PREFIX + 'delete')
 async def delete(request):
-    post = await request.json()
+    try:
+        post = await request.json()
+    except json.JSONDecodeError:
+        log.error("Bad request: invalid JSON body")
+        raise web.HTTPBadRequest(text='Invalid JSON body')
     ids = post.get('ids')
     where = post.get('where')
     if not ids or where not in ['queue', 'done']:
@@ -278,7 +293,11 @@ async def delete(request):
 
 @routes.post(config.URL_PREFIX + 'start')
 async def start(request):
-    post = await request.json()
+    try:
+        post = await request.json()
+    except json.JSONDecodeError:
+        log.error("Bad request: invalid JSON body")
+        raise web.HTTPBadRequest(text='Invalid JSON body')
     ids = post.get('ids')
     log.info(f"Received request to start pending downloads for ids: {ids}")
     status = await dqueue.start_pending(ids)

@@ -15,6 +15,8 @@ import subprocess
 import yt_dlp.networking.impersonate
 from dl_formats import get_format, get_opts, AUDIO_FORMATS
 from datetime import datetime
+import xml.sax.saxutils as saxutils
+import xml.etree.ElementTree as ET
 
 log = logging.getLogger('ytdl')
 
@@ -46,7 +48,7 @@ class DownloadQueueNotifier:
         raise NotImplementedError
 
 class DownloadInfo:
-    def __init__(self, id, title, url, quality, format, folder, custom_name_prefix, error, entry, playlist_item_limit, split_by_chapters, chapter_template):
+    def __init__(self, id, title, url, quality, format, folder, custom_name_prefix, error, entry, playlist_item_limit, split_by_chapters, chapter_template, download_thumbnail, download_metadata):
         self.id = id if len(custom_name_prefix) == 0 else f'{custom_name_prefix}.{id}'
         self.title = title if len(custom_name_prefix) == 0 else f'{custom_name_prefix}.{title}'
         self.url = url
@@ -63,7 +65,11 @@ class DownloadInfo:
         self.entry = _convert_generators_to_lists(entry) if entry is not None else None
         self.playlist_item_limit = playlist_item_limit
         self.split_by_chapters = split_by_chapters
+        self.playlist_item_limit = playlist_item_limit
+        self.split_by_chapters = split_by_chapters
         self.chapter_template = chapter_template
+        self.download_thumbnail = download_thumbnail
+        self.download_metadata = download_metadata
 
 class Download:
     manager = None
@@ -144,6 +150,68 @@ class Download:
                     'key': 'FFmpegSplitChapters',
                     'force_keyframes': False
                 })
+
+            if self.info.download_thumbnail:
+                ytdl_params['writethumbnail'] = True
+
+            if self.info.download_metadata:
+                def write_nfo(d):
+                     if d['status'] == 'finished':
+                        info = d.get('info_dict')
+                        if not info:
+                            return
+                        
+                        # Determine NFO filename (same basename as video)
+                        # info['filepath'] or info['_filename'] usually holds the file path
+                        filepath = info.get('filepath') or info.get('_filename')
+                        if not filepath:
+                             return
+                        
+                        base, _ = os.path.splitext(filepath)
+                        nfo_path = f"{base}.nfo"
+                        
+                        def escape(s):
+                            return saxutils.escape(str(s))
+
+                        try:
+                            with open(nfo_path, 'w', encoding='utf-8') as f:
+                                f.write('<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>\n')
+                                f.write('<movie>\n')
+                                f.write(f'  <title>{escape(info.get("title", ""))}</title>\n')
+                                f.write(f'  <originaltitle>{escape(info.get("original_title", ""))}</originaltitle>\n')
+                                f.write(f'  <userrating>{escape(info.get("average_rating", ""))}</userrating>\n')
+                                f.write(f'  <plot>{escape(info.get("description", ""))}</plot>\n')
+                                f.write(f'  <tagline></tagline>\n')
+                                f.write(f'  <mpaa></mpaa>\n')
+                                f.write(f'  <uniqueid type="{escape(info.get("extractor", "ytdl"))}" default="true">{escape(info.get("id", ""))}</uniqueid>\n')
+                                f.write(f'  <id>{escape(info.get("id", ""))}</id>\n')
+                                f.write(f'  <genre>{escape(", ".join(info.get("categories", [])))}</genre>\n')
+                                f.write(f'  <premiered>{escape(info.get("upload_date", ""))}</premiered>\n') # Format is usually YYYYMMDD
+                                f.write(f'  <year>{escape(info.get("upload_date", "")[:4] if info.get("upload_date") else "")}</year>\n')
+                                f.write(f'  <studio>{escape(info.get("uploader", ""))}</studio>\n')
+                                f.write(f'  <actor>\n')
+                                f.write(f'    <name>{escape(info.get("uploader", ""))}</name>\n')
+                                f.write(f'    <role>Uploader</role>\n')
+                                f.write(f'  </actor>\n')
+                                f.write('</movie>\n')
+                            
+                            # Verify parsability
+                            try:
+                                ET.parse(nfo_path)
+                                log.info(f"Generated and verified NFO file: {nfo_path}")
+                            except ET.ParseError as e:
+                                log.error(f"Generated NFO file is invalid: {nfo_path} - {e}")
+
+                        except Exception as e:
+                            log.error(f"Failed to write NFO file: {e}")
+
+                if 'progress_hooks' not in ytdl_params:
+                    ytdl_params['progress_hooks'] = []
+                # creating a hook to run after download. 
+                # progress_hooks run on download progress, but 'finished' status implies download complete.
+                # simpler to use a postprocessor if we want to ensure it runs after file is on disk?
+                # actually progress_hooks with status='finished' is reliably correct for "download done".
+                ytdl_params['progress_hooks'].append(write_nfo)
 
             ret = yt_dlp.YoutubeDL(params=ytdl_params).download([self.info.url])
             self.status_queue.put({'status': 'finished' if ret == 0 else 'error'})
@@ -352,7 +420,7 @@ class PersistentQueue:
                     log.debug(f"{log_prefix} failed: {result.stderr}")
                 else:
                     shutil.move(f"{self.path}.tmp", self.path)
-                    log.debug(f"{log_prefix}{result.stdout or " was successful, no output"}")
+                    log.debug(f"{log_prefix}{result.stdout or ' was successful, no output'}")
             except FileNotFoundError:
                 log.debug(f"{log_prefix} failed: 'sqlite3' was not found")
 
@@ -471,7 +539,7 @@ class DownloadQueue:
             self.pending.put(download)
         await self.notifier.added(dl)
 
-    async def __add_entry(self, entry, quality, format, folder, custom_name_prefix, playlist_item_limit, auto_start, split_by_chapters, chapter_template, already):
+    async def __add_entry(self, entry, quality, format, folder, custom_name_prefix, playlist_item_limit, auto_start, split_by_chapters, chapter_template, download_thumbnail, download_metadata, already):
         if not entry:
             return {'status': 'error', 'msg': "Invalid/empty data was given."}
 
@@ -487,7 +555,7 @@ class DownloadQueue:
 
         if etype.startswith('url'):
             log.debug('Processing as a url')
-            return await self.add(entry['url'], quality, format, folder, custom_name_prefix, playlist_item_limit, auto_start, split_by_chapters, chapter_template, already)
+            return await self.add(entry['url'], quality, format, folder, custom_name_prefix, playlist_item_limit, auto_start, split_by_chapters, chapter_template, download_thumbnail, download_metadata, already)
         elif etype == 'playlist' or etype == 'channel':
             log.debug(f'Processing as a {etype}')
             entries = entry['entries']
@@ -507,7 +575,7 @@ class DownloadQueue:
                 for property in ("id", "title", "uploader", "uploader_id"):
                     if property in entry:
                         etr[f"{etype}_{property}"] = entry[property]
-                results.append(await self.__add_entry(etr, quality, format, folder, custom_name_prefix, playlist_item_limit, auto_start, split_by_chapters, chapter_template, already))
+                results.append(await self.__add_entry(etr, quality, format, folder, custom_name_prefix, playlist_item_limit, auto_start, split_by_chapters, chapter_template, download_thumbnail, download_metadata, already))
             if any(res['status'] == 'error' for res in results):
                 return {'status': 'error', 'msg': ', '.join(res['msg'] for res in results if res['status'] == 'error' and 'msg' in res)}
             return {'status': 'ok'}
@@ -515,13 +583,13 @@ class DownloadQueue:
             log.debug('Processing as a video')
             key = entry.get('webpage_url') or entry['url']
             if not self.queue.exists(key):
-                dl = DownloadInfo(entry['id'], entry.get('title') or entry['id'], key, quality, format, folder, custom_name_prefix, error, entry, playlist_item_limit, split_by_chapters, chapter_template)
+                dl = DownloadInfo(entry['id'], entry.get('title') or entry['id'], key, quality, format, folder, custom_name_prefix, error, entry, playlist_item_limit, split_by_chapters, chapter_template, download_thumbnail, download_metadata)
                 await self.__add_download(dl, auto_start)
             return {'status': 'ok'}
         return {'status': 'error', 'msg': f'Unsupported resource "{etype}"'}
 
-    async def add(self, url, quality, format, folder, custom_name_prefix, playlist_item_limit, auto_start=True, split_by_chapters=False, chapter_template=None, already=None):
-        log.info(f'adding {url}: {quality=} {format=} {already=} {folder=} {custom_name_prefix=} {playlist_item_limit=} {auto_start=} {split_by_chapters=} {chapter_template=}')
+    async def add(self, url, quality, format, folder, custom_name_prefix, playlist_item_limit, auto_start=True, split_by_chapters=False, chapter_template=None, download_thumbnail=False, download_metadata=False, already=None):
+        log.info(f'adding {url}: {quality=} {format=} {already=} {folder=} {custom_name_prefix=} {playlist_item_limit=} {auto_start=} {split_by_chapters=} {chapter_template=} {download_thumbnail=} {download_metadata=}')
         already = set() if already is None else already
         if url in already:
             log.info('recursion detected, skipping')
@@ -532,7 +600,7 @@ class DownloadQueue:
             entry = await asyncio.get_running_loop().run_in_executor(None, self.__extract_info, url)
         except yt_dlp.utils.YoutubeDLError as exc:
             return {'status': 'error', 'msg': str(exc)}
-        return await self.__add_entry(entry, quality, format, folder, custom_name_prefix, playlist_item_limit, auto_start, split_by_chapters, chapter_template, already)
+        return await self.__add_entry(entry, quality, format, folder, custom_name_prefix, playlist_item_limit, auto_start, split_by_chapters, chapter_template, download_thumbnail, download_metadata, already)
 
     async def start_pending(self, ids):
         for id in ids:

@@ -10,6 +10,8 @@ export interface Download {
   playlist_item_limit: number;
   split_by_chapters?: boolean;
   chapter_template?: string;
+  download_thumbnail?: boolean;
+  download_metadata?: boolean;
   status: string;
   msg: string;
   percent: number;
