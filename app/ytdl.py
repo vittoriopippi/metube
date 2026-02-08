@@ -578,14 +578,21 @@ class DownloadQueue:
                 results.append(await self.__add_entry(etr, quality, format, folder, custom_name_prefix, playlist_item_limit, auto_start, split_by_chapters, chapter_template, download_thumbnail, download_metadata, already))
             if any(res['status'] == 'error' for res in results):
                 return {'status': 'error', 'msg': ', '.join(res['msg'] for res in results if res['status'] == 'error' and 'msg' in res)}
-            return {'status': 'ok'}
+            return {'status': 'ok', 'title': entry.get('title'), 'count': len(entries), 'entries': results}
         elif etype == 'video' or (etype.startswith('url') and 'id' in entry and 'title' in entry):
             log.debug('Processing as a video')
             key = entry.get('webpage_url') or entry['url']
             if not self.queue.exists(key):
                 dl = DownloadInfo(entry['id'], entry.get('title') or entry['id'], key, quality, format, folder, custom_name_prefix, error, entry, playlist_item_limit, split_by_chapters, chapter_template, download_thumbnail, download_metadata)
                 await self.__add_download(dl, auto_start)
-            return {'status': 'ok'}
+            return {
+                'status': 'ok',
+                'id': entry.get('id'),
+                'title': entry.get('title'),
+                'thumbnail': entry.get('thumbnail'),
+                'uploader': entry.get('uploader'),
+                'url': key
+            }
         return {'status': 'error', 'msg': f'Unsupported resource "{etype}"'}
 
     async def add(self, url, quality, format, folder, custom_name_prefix, playlist_item_limit, auto_start=True, split_by_chapters=False, chapter_template=None, download_thumbnail=False, download_metadata=False, already=None):
